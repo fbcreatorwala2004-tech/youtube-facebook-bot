@@ -33,7 +33,7 @@ jobs:
         python youtube_to_facebook_automation.py
     
     - name: Upload posted videos log
-      uses: actions/upload-artifact@v3
+  uses: actions/upload-artifact@v4
       with:
         name: posted-videos
         path: posted_videos.json

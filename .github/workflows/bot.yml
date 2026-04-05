@@ -9,7 +9,6 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
 
-    # ✅ Force new Node.js runtime (fix warning)
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -23,8 +22,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run bot
         env:
@@ -32,13 +30,12 @@ jobs:
           FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
           FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
           HASHTAGS: ${{ secrets.HASHTAGS }}
-        run: |
-          python youtube_to_facebook_automation.py
+        run: python youtube_to_facebook_automation.py
 
       - name: Upload posted videos log
-  if: success() && hashFiles('posted_videos.json') != ''
-  uses: actions/upload-artifact@v4
-  with:
-    name: posted-videos
-    path: posted_videos.json
-    retention-days: 90
+        if: ${{ hashFiles('posted_videos.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: posted-videos
+          path: posted_videos.json
+          retention-days: 90

@@ -1,138 +1,175 @@
 #!/usr/bin/env python3
 import os
 import json
-import time
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import yt_dlp
 from facebook import GraphAPI
+import time
 
 
 class YouTubeToFacebookBot:
     def __init__(self):
-        self.load_config()
-        self.posted_videos_file = 'posted_videos.json'
-        self.posted_videos = self.load_posted_videos()
-
-    def load_config(self):
-        # Load from GitHub Secrets
         self.youtube_channel_id = os.getenv('YOUTUBE_CHANNEL_ID')
         self.facebook_page_id = os.getenv('FACEBOOK_PAGE_ID')
         self.facebook_access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
-        self.hashtags = os.getenv('HASHTAGS', '#video #trending')
+        self.hashtags = os.getenv('HASHTAGS', '#reels #viral #video')
 
         if not all([self.youtube_channel_id, self.facebook_page_id, self.facebook_access_token]):
             raise Exception("❌ Missing environment variables")
 
-        self.youtube_channel_url = f"https://www.youtube.com/channel/{self.youtube_channel_id}"
         self.download_path = './downloads'
-
-        # Create folder (IMPORTANT)
         Path(self.download_path).mkdir(exist_ok=True)
 
-        print("✅ Running in GitHub Actions mode")
+        self.posted_file = 'posted_videos.json'
+        self.posted = self.load_posted()
 
-    def load_posted_videos(self):
-        if os.path.exists(self.posted_videos_file):
-            with open(self.posted_videos_file, 'r') as f:
+        print("🔥 Smart Bot Started (Anti-Spam Enabled)")
+
+    def load_posted(self):
+        if os.path.exists(self.posted_file):
+            with open(self.posted_file, 'r') as f:
                 return json.load(f)
         return {}
 
-    def save_posted_videos(self):
-        with open(self.posted_videos_file, 'w') as f:
-            json.dump(self.posted_videos, f, indent=2)
+    def save_posted(self):
+        with open(self.posted_file, 'w') as f:
+            json.dump(self.posted, f, indent=2)
 
-    def get_rss_url(self):
-        return f"https://www.youtube.com/feeds/videos.xml?channel_id={self.youtube_channel_id}"
+    def get_feed(self):
+        url = f"https://www.youtube.com/feeds/videos.xml?channel_id={self.youtube_channel_id}"
+        return feedparser.parse(url)
 
-    def check_new_videos(self):
-        print("🔍 Checking for new videos...")
-        feed = feedparser.parse(self.get_rss_url())
-
-        new_videos = []
+    def get_videos(self):
+        feed = self.get_feed()
+        videos = []
 
         for entry in feed.entries:
-            video_id = entry.yt_videoid
+            videos.append({
+                "id": entry.yt_videoid,
+                "title": entry.title,
+                "url": entry.link
+            })
 
-            if video_id not in self.posted_videos:
-                new_videos.append({
-                    "id": video_id,
-                    "url": entry.link,
-                    "title": entry.title
-                })
-                print(f"📹 New video: {entry.title}")
+        return videos
 
-        return new_videos
+    def get_videos_to_post(self):
+        all_videos = self.get_videos()
 
-    def download_video(self, url, video_id):
-        print("⬇️ Downloading video...")
+        # First run → upload old videos
+        if not self.posted:
+            print("📂 First run → scheduling old videos")
+            return all_videos[::-1]
 
-        path = os.path.join(self.download_path, f"{video_id}.mp4")
+        # Otherwise new videos only
+        new = []
+        for v in all_videos:
+            if v["id"] not in self.posted:
+                new.append(v)
 
-        ydl_opts = {
-            'format': 'mp4',
+        return new
+
+    def can_post_now(self):
+        """Ensure 1 post per hour"""
+        if not self.posted:
+            return True
+
+        last_post_time = max(
+            datetime.fromisoformat(v["time"])
+            for v in self.posted.values()
+            if "time" in v
+        )
+
+        next_allowed = last_post_time + timedelta(hours=1)
+
+        if datetime.now() < next_allowed:
+            wait = (next_allowed - datetime.now()).seconds // 60
+            print(f"⏳ Waiting {wait} minutes (anti-spam)")
+            return False
+
+        return True
+
+    def download_video(self, url, vid):
+        print("⬇️ Downloading 1080p...")
+
+        path = os.path.join(self.download_path, f"{vid}.mp4")
+
+        opts = {
+            'format': 'bestvideo[height<=1080]+bestaudio/best',
             'outtmpl': path,
+            'merge_output_format': 'mp4',
             'quiet': True,
             'noplaylist': True
         }
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
             return path
         except Exception as e:
             print("❌ Download error:", e)
             return None
 
-    def upload_to_facebook(self, video_path, title):
-        print("📤 Uploading to Facebook...")
+    def create_caption(self, title):
+        return f"🔥 {title}\n\n{self.hashtags}"
 
-        try:
-            graph = GraphAPI(access_token=self.facebook_access_token)
+    def upload_video(self, path, title):
+        print("📤 Uploading...")
 
-            description = f"{title}\n\n{self.hashtags}"
+        graph = GraphAPI(access_token=self.facebook_access_token)
+        caption = self.create_caption(title)
 
-            with open(video_path, 'rb') as video:
-                res = graph.put_video(video=video, description=description)
+        for attempt in range(3):
+            try:
+                with open(path, 'rb') as video:
+                    res = graph.put_video(video=video, description=caption)
 
-            print("✅ Uploaded successfully")
-            return res.get("id")
+                print("✅ Uploaded successfully")
+                return res.get("id")
 
-        except Exception as e:
-            print("❌ Upload error:", e)
-            return None
+            except Exception as e:
+                print(f"⚠️ Retry {attempt+1}: {e}")
+                time.sleep(5)
 
-    def process_video(self, video):
+        return None
+
+    def process(self, video):
         vid = video["id"]
 
-        video_path = self.download_video(video["url"], vid)
-
-        if not video_path:
+        file = self.download_video(video["url"], vid)
+        if not file:
             return
 
-        post_id = self.upload_to_facebook(video_path, video["title"])
+        post_id = self.upload_video(file, video["title"])
 
         if post_id:
-            self.posted_videos[vid] = True
-            self.save_posted_videos()
-            os.remove(video_path)
+            self.posted[vid] = {
+                "title": video["title"],
+                "time": datetime.now().isoformat()
+            }
+            self.save_posted()
+            os.remove(file)
+            print("🗑️ Cleaned")
+        else:
+            print("❌ Upload failed")
 
     def run(self):
-        videos = self.check_new_videos()
-
-        if not videos:
-            print("ℹ️ No new videos")
+        if not self.can_post_now():
             return
 
-        for video in videos:
-            self.process_video(video)
+        videos = self.get_videos_to_post()
 
+        if not videos:
+            print("ℹ️ No videos to post")
+            return
 
-def main():
-    bot = YouTubeToFacebookBot()
-    bot.run()
+        print(f"📊 {len(videos)} videos pending")
+
+        # Post only ONE video per run (anti-spam)
+        self.process(videos[0])
 
 
 if __name__ == "__main__":
-    main()
+    bot = YouTubeToFacebookBot()
+    bot.run()

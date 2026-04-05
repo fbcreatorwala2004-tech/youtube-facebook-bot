@@ -29,7 +29,22 @@ class YouTubeToFacebookBot:
         self.posted_videos = self.load_posted_videos()
         
     def load_config(self):
-        """Load configuration from JSON file"""
+        """Load configuration from environment variables or JSON file"""
+        # Try environment variables first (for GitHub Actions)
+        self.youtube_channel_id = os.getenv('YOUTUBE_CHANNEL_ID')
+        self.facebook_page_id = os.getenv('FACEBOOK_PAGE_ID')
+        self.facebook_access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
+        self.hashtags = os.getenv('HASHTAGS', '#video #trending')
+        
+        # If env vars exist, we're in GitHub Actions
+        if self.youtube_channel_id and self.facebook_page_id and self.facebook_access_token:
+            self.youtube_channel_url = f"https://www.youtube.com/channel/{self.youtube_channel_id}"
+            self.check_interval = 900  # 15 minutes for GitHub Actions
+            self.download_path = './downloads'
+            print("✅ Running in GitHub Actions mode")
+            return
+        
+        # Otherwise, try config file (for local use)
         if not os.path.exists(self.config_file):
             print(f"❌ Config file '{self.config_file}' not found!")
             print("Creating template config file...")
@@ -44,7 +59,7 @@ class YouTubeToFacebookBot:
         self.facebook_page_id = config.get('facebook_page_id')
         self.facebook_access_token = config.get('facebook_access_token')
         self.hashtags = config.get('hashtags', '#video #trending')
-        self.check_interval = config.get('check_interval_seconds', 300)  # 5 minutes default
+        self.check_interval = config.get('check_interval_seconds', 300)
         self.download_path = config.get('download_path', './downloads')
         
         # Create download directory
@@ -277,7 +292,12 @@ class YouTubeToFacebookBot:
 def main():
     """Main entry point"""
     bot = YouTubeToFacebookBot()
-    bot.run_forever()
+    # For GitHub Actions, run once per execution
+    if os.getenv('GITHUB_ACTIONS'):
+        bot.run_once()
+    else:
+        # For local/server deployment, run forever
+        bot.run_forever()
 
 
 if __name__ == "__main__":

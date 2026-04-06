@@ -43,7 +43,11 @@ class YouTubeToFacebookBot:
 
     def get_feed(self):
         url = f"https://www.youtube.com/feeds/videos.xml?channel_id={self.youtube_channel_id}"
-        return feedparser.parse(url)
+        feed = feedparser.parse(url)
+
+        print("📡 Feed entries:", len(feed.entries))  # DEBUG
+
+        return feed
 
     def get_videos(self):
         feed = self.get_feed()
@@ -61,12 +65,15 @@ class YouTubeToFacebookBot:
     def get_videos_to_post(self):
         videos = self.get_videos()
 
-        # First run → upload ALL videos
-        if not self.posted:
-            return sorted(videos, key=lambda x: x["id"])
+        print("🎥 Total videos found:", len(videos))
+        print("📦 Already posted:", len(self.posted))
 
-        # Next runs → only new videos
-        return [v for v in videos if v["id"] not in self.posted]
+        # Only videos not already posted
+        new_videos = [v for v in videos if v["id"] not in self.posted]
+
+        print("🆕 Videos to post:", len(new_videos))
+
+        return new_videos
 
     # ---------------- DOWNLOAD ----------------
 
@@ -107,26 +114,26 @@ class YouTubeToFacebookBot:
 
         caption = self.create_caption(title)
 
-        files = {
-            'source': open(path, 'rb')
-        }
-
-        data = {
-            'access_token': self.facebook_access_token,
-            'description': caption
-        }
-
         try:
-            response = requests.post(url, files=files, data=data)
-            result = response.json()
+            with open(path, 'rb') as file:
+                response = requests.post(
+                    url,
+                    files={'source': file},
+                    data={
+                        'access_token': self.facebook_access_token,
+                        'description': caption
+                    }
+                )
 
-            print("📩 Response:", result)
+            print("📩 Response:", response.text)
+
+            result = response.json()
 
             if 'id' in result:
                 print("✅ Upload success")
                 return result['id']
             else:
-                print("❌ Upload failed:", result)
+                print("❌ Upload failed")
                 return None
 
         except Exception as e:
@@ -153,7 +160,7 @@ class YouTubeToFacebookBot:
             self.save_posted()
 
             os.remove(file)
-            print("🗑️ File cleaned")
+            print("🗑️ File deleted")
 
         else:
             print("❌ Upload failed")
@@ -164,13 +171,13 @@ class YouTubeToFacebookBot:
         videos = self.get_videos_to_post()
 
         if not videos:
-            print("ℹ️ No new videos")
+            print("ℹ️ No new videos found")
             return
 
-        print(f"📊 {len(videos)} videos found")
+        print(f"📊 Processing {len(videos)} videos")
 
-        # 🔥 THIS IS THE FIX — process ALL videos
         for video in videos:
+            print("🚀 Processing:", video["title"])
             self.process(video)
 
 

@@ -4,10 +4,9 @@ import os
 import json
 import feedparser
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 import yt_dlp
-import time
 
 
 class YouTubeToFacebookBot:
@@ -62,27 +61,12 @@ class YouTubeToFacebookBot:
     def get_videos_to_post(self):
         videos = self.get_videos()
 
+        # First run → upload ALL videos
         if not self.posted:
-            return videos[::-1]
+            return sorted(videos, key=lambda x: x["id"])
 
+        # Next runs → only new videos
         return [v for v in videos if v["id"] not in self.posted]
-
-    # ---------------- ANTI-SPAM ----------------
-
-    def can_post_now(self):
-        if not self.posted:
-            return True
-
-        last_time = max(
-            datetime.fromisoformat(v["time"])
-            for v in self.posted.values()
-        )
-
-        if datetime.now() < last_time + timedelta(hours=1):
-            print("⏳ Waiting to avoid spam")
-            return False
-
-        return True
 
     # ---------------- DOWNLOAD ----------------
 
@@ -132,24 +116,22 @@ class YouTubeToFacebookBot:
             'description': caption
         }
 
-        for attempt in range(3):
-            try:
-                response = requests.post(url, files=files, data=data)
-                result = response.json()
+        try:
+            response = requests.post(url, files=files, data=data)
+            result = response.json()
 
-                print("📩 Response:", result)
+            print("📩 Response:", result)
 
-                if 'id' in result:
-                    print("✅ Upload success")
-                    return result['id']
-                else:
-                    raise Exception(result)
+            if 'id' in result:
+                print("✅ Upload success")
+                return result['id']
+            else:
+                print("❌ Upload failed:", result)
+                return None
 
-            except Exception as e:
-                print(f"⚠️ Retry {attempt+1} failed:", e)
-                time.sleep(5)
-
-        return None
+        except Exception as e:
+            print("❌ Upload error:", e)
+            return None
 
     # ---------------- PROCESS ----------------
 
@@ -179,9 +161,6 @@ class YouTubeToFacebookBot:
     # ---------------- MAIN RUN ----------------
 
     def run(self):
-        if not self.can_post_now():
-            return
-
         videos = self.get_videos_to_post()
 
         if not videos:
@@ -190,7 +169,9 @@ class YouTubeToFacebookBot:
 
         print(f"📊 {len(videos)} videos found")
 
-        self.process(videos[0])
+        # 🔥 THIS IS THE FIX — process ALL videos
+        for video in videos:
+            self.process(video)
 
 
 if __name__ == "__main__":

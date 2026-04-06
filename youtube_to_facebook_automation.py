@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+
 import os
 import json
 import feedparser
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 import yt_dlp
-from facebook import GraphAPI
 import time
 
 
@@ -25,7 +26,9 @@ class YouTubeToFacebookBot:
         self.posted_file = 'posted_videos.json'
         self.posted = self.load_posted()
 
-        print("🔥 Smart Bot Started (Anti-Spam Enabled)")
+        print("🔥 Bot Started Successfully")
+
+    # ---------------- LOAD / SAVE ----------------
 
     def load_posted(self):
         if os.path.exists(self.posted_file):
@@ -36,6 +39,8 @@ class YouTubeToFacebookBot:
     def save_posted(self):
         with open(self.posted_file, 'w') as f:
             json.dump(self.posted, f, indent=2)
+
+    # ---------------- YOUTUBE ----------------
 
     def get_feed(self):
         url = f"https://www.youtube.com/feeds/videos.xml?channel_id={self.youtube_channel_id}"
@@ -55,47 +60,38 @@ class YouTubeToFacebookBot:
         return videos
 
     def get_videos_to_post(self):
-        all_videos = self.get_videos()
+        videos = self.get_videos()
 
-        # First run → upload old videos
         if not self.posted:
-            print("📂 First run → scheduling old videos")
-            return all_videos[::-1]
+            return videos[::-1]
 
-        # Otherwise new videos only
-        new = []
-        for v in all_videos:
-            if v["id"] not in self.posted:
-                new.append(v)
+        return [v for v in videos if v["id"] not in self.posted]
 
-        return new
+    # ---------------- ANTI-SPAM ----------------
 
     def can_post_now(self):
-        """Ensure 1 post per hour"""
         if not self.posted:
             return True
 
-        last_post_time = max(
+        last_time = max(
             datetime.fromisoformat(v["time"])
             for v in self.posted.values()
-            if "time" in v
         )
 
-        next_allowed = last_post_time + timedelta(hours=1)
-
-        if datetime.now() < next_allowed:
-            wait = (next_allowed - datetime.now()).seconds // 60
-            print(f"⏳ Waiting {wait} minutes (anti-spam)")
+        if datetime.now() < last_time + timedelta(hours=1):
+            print("⏳ Waiting to avoid spam")
             return False
 
         return True
 
+    # ---------------- DOWNLOAD ----------------
+
     def download_video(self, url, vid):
-        print("⬇️ Downloading 1080p...")
+        print("⬇️ Downloading video...")
 
         path = os.path.join(self.download_path, f"{vid}.mp4")
 
-        opts = {
+        ydl_opts = {
             'format': 'bestvideo[height<=1080]+bestaudio/best',
             'outtmpl': path,
             'merge_output_format': 'mp4',
@@ -104,35 +100,58 @@ class YouTubeToFacebookBot:
         }
 
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
+
             return path
+
         except Exception as e:
             print("❌ Download error:", e)
             return None
 
+    # ---------------- CAPTION ----------------
+
     def create_caption(self, title):
         return f"🔥 {title}\n\n{self.hashtags}"
 
-    def upload_video(self, path, title):
-        print("📤 Uploading...")
+    # ---------------- FACEBOOK UPLOAD ----------------
 
-        graph = GraphAPI(access_token=self.facebook_access_token)
+    def upload_video(self, path, title):
+        print("📤 Uploading to Facebook...")
+
+        url = f"https://graph.facebook.com/v19.0/{self.facebook_page_id}/videos"
+
         caption = self.create_caption(title)
+
+        files = {
+            'source': open(path, 'rb')
+        }
+
+        data = {
+            'access_token': self.facebook_access_token,
+            'description': caption
+        }
 
         for attempt in range(3):
             try:
-                with open(path, 'rb') as video:
-                    res = graph.put_video(video=video, description=caption)
+                response = requests.post(url, files=files, data=data)
+                result = response.json()
 
-                print("✅ Uploaded successfully")
-                return res.get("id")
+                print("📩 Response:", result)
+
+                if 'id' in result:
+                    print("✅ Upload success")
+                    return result['id']
+                else:
+                    raise Exception(result)
 
             except Exception as e:
-                print(f"⚠️ Retry {attempt+1}: {e}")
+                print(f"⚠️ Retry {attempt+1} failed:", e)
                 time.sleep(5)
 
         return None
+
+    # ---------------- PROCESS ----------------
 
     def process(self, video):
         vid = video["id"]
@@ -148,11 +167,16 @@ class YouTubeToFacebookBot:
                 "title": video["title"],
                 "time": datetime.now().isoformat()
             }
+
             self.save_posted()
+
             os.remove(file)
-            print("🗑️ Cleaned")
+            print("🗑️ File cleaned")
+
         else:
             print("❌ Upload failed")
+
+    # ---------------- MAIN RUN ----------------
 
     def run(self):
         if not self.can_post_now():
@@ -161,12 +185,11 @@ class YouTubeToFacebookBot:
         videos = self.get_videos_to_post()
 
         if not videos:
-            print("ℹ️ No videos to post")
+            print("ℹ️ No new videos")
             return
 
-        print(f"📊 {len(videos)} videos pending")
+        print(f"📊 {len(videos)} videos found")
 
-        # Post only ONE video per run (anti-spam)
         self.process(videos[0])
 
 

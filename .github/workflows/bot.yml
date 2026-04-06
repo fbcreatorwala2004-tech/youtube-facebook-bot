@@ -25,7 +25,7 @@ jobs:
 
       - name: Setup YouTube cookies
         run: |
-          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt
+          echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
 
       - name: Run bot
         env:

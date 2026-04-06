@@ -19,8 +19,6 @@ class YouTubeToFacebookBot:
 
         self.posted_file = 'posted_videos.json'
         self.posted = self.load_posted()
-
-        # convert to set for FAST lookup (prevents duplicates perfectly)
         self.posted_ids = set(self.posted.keys())
 
         print("🔥 Bot Started Successfully")
@@ -73,23 +71,17 @@ class YouTubeToFacebookBot:
     def get_videos_to_post(self):
         videos = self.get_videos()
 
-        new_videos = []
-
-        for v in videos:
-            if v["id"] not in self.posted_ids:
-                new_videos.append(v)
-
-        return new_videos
+        return [v for v in videos if v["id"] not in self.posted_ids]
 
     # ---------------- CAPTION ----------------
 
     def create_caption(self, title):
         return f"🔥 {title}\n\n{self.hashtags}"
 
-    # ---------------- FACEBOOK UPLOAD (STREAMING) ----------------
+    # ---------------- FACEBOOK UPLOAD (STREAM) ----------------
 
     def upload_video(self, video_url, title):
-        print("📤 Uploading (streaming)...")
+        print("📤 Uploading...")
 
         url = f"https://graph.facebook.com/v19.0/{self.facebook_page_id}/videos"
 
@@ -127,7 +119,6 @@ class YouTubeToFacebookBot:
     def process(self, video):
         vid = video["id"]
 
-        # 🚨 duplicate protection (FAST)
         if vid in self.posted_ids:
             print(f"⏭️ Skipping duplicate: {vid}")
             return
@@ -140,14 +131,8 @@ class YouTubeToFacebookBot:
                 "time": datetime.now().isoformat()
             }
 
-            self.posted_ids.add(vid)  # keep in memory
-
+            self.posted_ids.add(vid)
             self.save_posted()
-
-            print("✅ Saved to posted list")
-
-        else:
-            print("❌ Upload failed")
 
     # ---------------- RUN ----------------
 

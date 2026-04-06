@@ -3,6 +3,7 @@
 import os
 import json
 import requests
+import time
 from datetime import datetime
 
 
@@ -47,30 +48,24 @@ class YouTubeToFacebookBot:
             "&maxResults=10"
         )
 
-        try:
-            data = requests.get(url).json()
+        data = requests.get(url).json()
 
-            videos = []
+        videos = []
 
-            for item in data.get("items", []):
-                if item["id"]["kind"] == "youtube#video":
-                    vid = item["id"]["videoId"]
+        for item in data.get("items", []):
+            if item["id"]["kind"] == "youtube#video":
+                vid = item["id"]["videoId"]
 
-                    videos.append({
-                        "id": vid,
-                        "title": item["snippet"]["title"],
-                        "url": f"https://www.youtube.com/watch?v={vid}"
-                    })
+                videos.append({
+                    "id": vid,
+                    "title": item["snippet"]["title"],
+                    "url": f"https://www.youtube.com/watch?v={vid}"
+                })
 
-            return videos
-
-        except Exception as e:
-            print("❌ YouTube API error:", e)
-            return []
+        return videos
 
     def get_videos_to_post(self):
         videos = self.get_videos()
-
         return [v for v in videos if v["id"] not in self.posted_ids]
 
     # ---------------- CAPTION ----------------
@@ -78,41 +73,64 @@ class YouTubeToFacebookBot:
     def create_caption(self, title):
         return f"🔥 {title}\n\n{self.hashtags}"
 
-    # ---------------- FACEBOOK UPLOAD (STREAM) ----------------
+    # ---------------- PROGRESS UPLOAD ----------------
 
-    def upload_video(self, video_url, title):
-        print("📤 Uploading...")
-
+    def upload_video_with_progress(self, video_url, title):
         url = f"https://graph.facebook.com/v19.0/{self.facebook_page_id}/videos"
 
-        try:
-            with requests.get(video_url, stream=True) as r:
-                r.raise_for_status()
+        retries = 3
 
-                files = {
-                    'source': ('video.mp4', r.raw, 'video/mp4')
-                }
+        for attempt in range(1, retries + 1):
+            print(f"📤 Upload attempt {attempt}...")
 
-                data = {
-                    'access_token': self.facebook_access_token,
-                    'description': self.create_caption(title)
-                }
+            try:
+                with requests.get(video_url, stream=True) as r:
+                    r.raise_for_status()
 
-                response = requests.post(url, files=files, data=data)
-                result = response.json()
+                    total = int(r.headers.get('content-length', 0))
+                    uploaded = 0
 
-                print("📩 Response:", result)
+                    def generate():
+                        nonlocal uploaded
+                        for chunk in r.iter_content(chunk_size=1024 * 1024):
+                            if chunk:
+                                uploaded += len(chunk)
+                                yield chunk
 
-                if 'id' in result:
-                    print("✅ Upload success")
-                    return result['id']
+                                if total:
+                                    percent = int((uploaded / total) * 100)
+                                    print(f"⏳ Uploading... {percent}%")
 
-                print("❌ Upload failed")
-                return None
+                    files = {
+                        'source': ('video.mp4', generate(), 'video/mp4')
+                    }
 
-        except Exception as e:
-            print("❌ Upload error:", e)
-            return None
+                    data = {
+                        'access_token': self.facebook_access_token,
+                        'description': self.create_caption(title)
+                    }
+
+                    response = requests.post(url, files=files, data=data)
+                    result = response.json()
+
+                    print("📩 Response:", result)
+
+                    if 'id' in result:
+                        print("✅ Upload success")
+                        return result['id']
+
+                    else:
+                        print("❌ Upload failed")
+
+            except Exception as e:
+                print("❌ Error:", e)
+
+            # Retry delay
+            print("🔁 Retrying in 5 seconds...")
+            time.sleep(5)
+
+        print("❌ All retry attempts failed")
+        return None
 
     # ---------------- PROCESS ----------------
 
@@ -123,7 +141,7 @@ class YouTubeToFacebookBot:
             print(f"⏭️ Skipping duplicate: {vid}")
             return
 
-        post_id = self.upload_video(video["url"], video["title"])
+        post_id = self.upload_video_with_progress(video["url"], video["title"])
 
         if post_id:
             self.posted[vid] = {

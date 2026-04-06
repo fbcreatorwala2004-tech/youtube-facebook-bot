@@ -142,6 +142,7 @@ class YouTubeToFacebookBot:
             'quiet': False,
             'no_warnings': False,
             'noplaylist': True,
+            'cookiefile': 'cookies.txt',  # ← ADD THIS LINE
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',

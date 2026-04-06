@@ -1,172 +1,129 @@
-#!/usr/bin/env python3
-
 import os
 import json
-import requests
 import time
-from datetime import datetime
+import requests
+from googleapiclient.discovery import build
 
+# =========================
+# CONFIG
+# =========================
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID")
+FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID")
+FACEBOOK_ACCESS_TOKEN = os.getenv("FACEBOOK_ACCESS_TOKEN")
+HASHTAGS = os.getenv("HASHTAGS", "")
 
-class YouTubeToFacebookBot:
-    def __init__(self):
-        self.youtube_channel_id = os.getenv('YOUTUBE_CHANNEL_ID')
-        self.api_key = os.getenv('YOUTUBE_API_KEY')
-        self.facebook_page_id = os.getenv('FACEBOOK_PAGE_ID')
-        self.facebook_access_token = os.getenv('FACEBOOK_ACCESS_TOKEN')
-        self.hashtags = os.getenv('HASHTAGS', '#reels #viral #video')
+POSTED_FILE = "posted_videos.json"
 
-        if not all([self.youtube_channel_id, self.api_key, self.facebook_page_id, self.facebook_access_token]):
-            raise Exception("❌ Missing environment variables")
+# =========================
+# VALIDATION
+# =========================
+if not all([YOUTUBE_API_KEY, YOUTUBE_CHANNEL_ID, FACEBOOK_PAGE_ID, FACEBOOK_ACCESS_TOKEN]):
+    raise Exception("❌ Missing environment variables")
 
-        self.posted_file = 'posted_videos.json'
-        self.posted = self.load_posted()
-        self.posted_ids = set(self.posted.keys())
+# =========================
+# INIT YOUTUBE
+# =========================
+youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
-        print("🔥 Bot Started Successfully")
+# =========================
+# LOAD POSTED VIDEOS
+# =========================
+def load_posted():
+    if not os.path.exists(POSTED_FILE):
+        return set()
+    with open(POSTED_FILE, "r") as f:
+        return set(json.load(f))
 
-    # ---------------- LOAD / SAVE ----------------
+def save_posted(posted):
+    with open(POSTED_FILE, "w") as f:
+        json.dump(list(posted), f)
 
-    def load_posted(self):
-        if os.path.exists(self.posted_file):
-            with open(self.posted_file, 'r') as f:
-                return json.load(f)
-        return {}
+# =========================
+# GET VIDEOS
+# =========================
+def get_latest_videos():
+    request = youtube.search().list(
+        part="snippet",
+        channelId=YOUTUBE_CHANNEL_ID,
+        maxResults=10,
+        order="date"
+    )
+    response = request.execute()
 
-    def save_posted(self):
-        with open(self.posted_file, 'w') as f:
-            json.dump(self.posted, f, indent=2)
+    videos = []
 
-    # ---------------- YOUTUBE ----------------
+    for item in response.get("items", []):
+        if item["id"]["kind"] == "youtube#video":
+            video_id = item["id"]["videoId"]
+            title = item["snippet"]["title"]
+            videos.append((video_id, title))
 
-    def get_videos(self):
-        url = (
-            "https://www.googleapis.com/youtube/v3/search"
-            f"?key={self.api_key}"
-            f"&channelId={self.youtube_channel_id}"
-            "&part=snippet,id"
-            "&order=date"
-            "&maxResults=10"
-        )
+    return videos
 
-        data = requests.get(url).json()
+# =========================
+# FACEBOOK UPLOAD (TEXT POST)
+# =========================
+def post_to_facebook(title, video_id):
+    url = f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}/feed"
 
-        videos = []
+    message = f"{title}\n\nhttps://www.youtube.com/watch?v={video_id}\n\n{HASHTAGS}"
 
-        for item in data.get("items", []):
-            if item["id"]["kind"] == "youtube#video":
-                vid = item["id"]["videoId"]
+    payload = {
+        "message": message,
+        "access_token": FACEBOOK_ACCESS_TOKEN
+    }
 
-                videos.append({
-                    "id": vid,
-                    "title": item["snippet"]["title"],
-                    "url": f"https://www.youtube.com/watch?v={vid}"
-                })
+    for attempt in range(3):
+        try:
+            print(f"📤 Upload attempt {attempt+1}")
 
-        return videos
+            res = requests.post(url, data=payload)
+            data = res.json()
 
-    def get_videos_to_post(self):
-        videos = self.get_videos()
-        return [v for v in videos if v["id"] not in self.posted_ids]
+            if res.status_code == 200:
+                print(f"✅ Posted: {data}")
+                return True
+            else:
+                print("❌ Error:", data)
 
-    # ---------------- CAPTION ----------------
+        except Exception as e:
+            print("❌ Exception:", e)
 
-    def create_caption(self, title):
-        return f"🔥 {title}\n\n{self.hashtags}"
+        time.sleep(5)
 
-    # ---------------- PROGRESS UPLOAD ----------------
+    return False
 
-    def upload_video_with_progress(self, video_url, title):
-        url = f"https://graph.facebook.com/v19.0/{self.facebook_page_id}/videos"
+# =========================
+# MAIN LOGIC
+# =========================
+def main():
+    print("🔥 Bot Started Successfully")
 
-        retries = 3
+    posted = load_posted()
+    videos = get_latest_videos()
 
-        for attempt in range(1, retries + 1):
-            print(f"📤 Upload attempt {attempt}...")
+    print(f"📊 {len(videos)} videos found")
 
-            try:
-                with requests.get(video_url, stream=True) as r:
-                    r.raise_for_status()
+    new_videos = []
 
-                    total = int(r.headers.get('content-length', 0))
-                    uploaded = 0
+    for vid, title in videos:
+        if vid not in posted:
+            new_videos.append((vid, title))
 
-                    def generate():
-                        nonlocal uploaded
-                        for chunk in r.iter_content(chunk_size=1024 * 1024):
-                            if chunk:
-                                uploaded += len(chunk)
-                                yield chunk
+    print(f"🆕 New videos: {len(new_videos)}")
 
-                                if total:
-                                    percent = int((uploaded / total) * 100)
-                                    print(f"⏳ Uploading... {percent}%")
+    for vid, title in new_videos:
+        success = post_to_facebook(title, vid)
 
-                    files = {
-                        'source': ('video.mp4', generate(), 'video/mp4')
-                    }
+        if success:
+            posted.add(vid)
+            save_posted(posted)
 
-                    data = {
-                        'access_token': self.facebook_access_token,
-                        'description': self.create_caption(title)
-                    }
+        print("⏳ Waiting before next upload...")
+        time.sleep(10)
 
-                    response = requests.post(url, files=files, data=data)
-                    result = response.json()
-
-                    print("📩 Response:", result)
-
-                    if 'id' in result:
-                        print("✅ Upload success")
-                        return result['id']
-
-                    else:
-                        print("❌ Upload failed")
-
-            except Exception as e:
-                print("❌ Error:", e)
-
-            # Retry delay
-            print("🔁 Retrying in 5 seconds...")
-            time.sleep(5)
-
-        print("❌ All retry attempts failed")
-        return None
-
-    # ---------------- PROCESS ----------------
-
-    def process(self, video):
-        vid = video["id"]
-
-        if vid in self.posted_ids:
-            print(f"⏭️ Skipping duplicate: {vid}")
-            return
-
-        post_id = self.upload_video_with_progress(video["url"], video["title"])
-
-        if post_id:
-            self.posted[vid] = {
-                "title": video["title"],
-                "time": datetime.now().isoformat()
-            }
-
-            self.posted_ids.add(vid)
-            self.save_posted()
-
-    # ---------------- RUN ----------------
-
-    def run(self):
-        videos = self.get_videos_to_post()
-
-        if not videos:
-            print("ℹ️ No new videos")
-            return
-
-        print(f"📊 {len(videos)} new videos found")
-
-        for video in videos:
-            self.process(video)
-
+    print("✅ Done")
 
 if __name__ == "__main__":
-    bot = YouTubeToFacebookBot()
-    bot.run()
+    main()

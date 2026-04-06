@@ -24,12 +24,14 @@ jobs:
           pip install -r requirements.txt
 
       - name: Setup YouTube cookies
-  run: echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt
+        run: |
+          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt
 
-- name: Run bot
-  env:
-    YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
-    FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
-    FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
-    HASHTAGS: ${{ secrets.HASHTAGS }}
-  run: python youtube_to_facebook_automation.py
+      - name: Run bot
+        env:
+          YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          HASHTAGS: ${{ secrets.HASHTAGS }}
+        run: |
+          python youtube_to_facebook_automation.py
